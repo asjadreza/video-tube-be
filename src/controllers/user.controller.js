@@ -11,7 +11,8 @@ const registerUser = asyncHandler(async (req, res) => {
 
   // get user details from front end
   const { fullname, email, username, password } = req.body;
-  console.log(fullname, email, username, password);
+  //   console.log(fullname, email, username, password);
+  //   console.log(req.body)
   // validation - not empty
   if (!fullname || fullname.trim() === "") {
     throw new ApiError(400, "Fullname is required");
@@ -33,16 +34,28 @@ const registerUser = asyncHandler(async (req, res) => {
   }
 
   // check if user already exist: username, email
-  const existedUser = User.findOne({
+  const existedUser = await User.findOne({
     // using operator
     $or: [{ username }, { email }],
   });
   if (existedUser) {
     throw new ApiError(409, "User with this email or username already exist");
   }
+  //   console.log(req.files);
+
   // check for images, check for avatar
   const avatarLocalpath = req.files?.avatar[0]?.path;
-  const coverImageLocalPath = req.files?.coverImage[0]?.path;
+  // const coverImageLocalPath = req.files?.coverImage[0]?.path;
+
+  // handling undefined error, warna to upar waale line se bhi kaam ho jata
+  let coverImageLocalPath;
+  if (
+    req.files &&
+    Array.isArray(req.files.coverImage) &&
+    req.files.coverImage.length > 0
+  ) {
+    coverImageLocalPath = req.files.coverImage[0].path;
+  }
 
   if (!avatarLocalpath) {
     throw new ApiError(400, "Avatar file is required");
@@ -61,7 +74,7 @@ const registerUser = asyncHandler(async (req, res) => {
     coverImage: coverImage?.url || "",
     email,
     password,
-    username: username.toLowercase(),
+    username: username.toLowerCase(),
   });
   // remove password and refresh token field from response
   const createdUser = await User.findById(user._id).select(
