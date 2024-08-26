@@ -275,7 +275,7 @@ const updateAccountDetails = asyncHandler(async (req, res) => {
 
   // updating fullname and email using set
   const user = await User.findByIdAndUpdate(
-    req.body?._id,
+    req.user?._id,
     {
       $set: {
         fullname: fullname,
@@ -292,6 +292,7 @@ const updateAccountDetails = asyncHandler(async (req, res) => {
 
 const updateUserAvatar = asyncHandler(async (req, res) => {
   const avatarLocalpath = req.file?.path;
+
   if (!avatarLocalpath) {
     throw new ApiError(400, "Avatar file is missing");
   }
@@ -300,6 +301,8 @@ const updateUserAvatar = asyncHandler(async (req, res) => {
   if (!avatar.url) {
     throw new ApiError(400, "Error while uploading avatar");
   }
+
+ 
 
   // agar sub kuch thik hai to update the image
   const user = await User.findByIdAndUpdate(
@@ -311,6 +314,8 @@ const updateUserAvatar = asyncHandler(async (req, res) => {
     },
     { new: true }
   ).select("-password");
+
+   //TODO : Delete the old image - assignment
 
   return res
     .status(200)
@@ -339,10 +344,89 @@ const updateUserCoverImage = asyncHandler(async (req, res) => {
     { new: true }
   ).select("-password");
 
+  // Todo: delete the old image - assignment
+
   return res
     .status(200)
     .json(new ApiResponse(200, user, "Cover image updated successfully"));
 });
+
+
+const getUserChannelProfile = asyncHandler(async (req, res) => {
+  const {username} = req.params  // will get this details from url not from body
+
+  if(!username?.trim()) {
+    throw new ApiError(400, "Username is missing")
+  }
+
+  const channel = await User.aggregate([
+    // first pipeline 
+    {
+      $match: {
+        username: username?.toLowerCase()
+      }
+    },
+    {
+      $lookup: {
+        from: "subscriptions", // here model name change to plural and lowercase
+        localField: "_id",
+        foreignField: "channel",
+        as: "subscribers"
+      }
+    },
+    {
+      $lookup: {
+        from: "subscriptions", // here model name change to plural and lowercase
+        localField: "_id",
+        foreignField: "subscriber",
+        as: "subscribedTo"
+      }
+    },
+    {
+      $addFields: {
+        subscribersCount: {
+          $size: "$subscribers"
+        },
+        channelsSubscribedToCount: {
+          $size: "$subscribedTo"
+        },
+        // checking you have subscribed or not
+        isSubscribed: {
+          $cond: {
+            if: {$in: [req.user?._id, "$subscribers.subscriber"]},
+            then: true,
+            esle: false
+          }
+        }
+      }
+    },
+    {
+      $project: {
+        fullname: 1,
+        username: 1,
+        subscribersCount: 1,
+        channelsSubscribedToCount: 1,
+        isSubscribed: 1,
+        avatar: 1,
+        coverImage: 1,
+        email: 1
+      }
+    }
+  ])
+
+  if(!channel?.length) {
+    throw new ApiError(404, "Channel does not exists")
+  }
+  // console.log(channel)
+
+  // if everything goes fine then return the response
+  return res
+  .status(200)
+  .json(
+    new ApiResponse(200, channel[0], "User channel fetched succesfully")
+  )
+})
+
 
 export {
   registerUser,
@@ -354,4 +438,5 @@ export {
   updateAccountDetails,
   updateUserAvatar,
   updateUserCoverImage,
+  getUserChannelProfile
 };
