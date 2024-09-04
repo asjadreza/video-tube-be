@@ -5,15 +5,10 @@ import { User } from "../models/user.model.js";
 import { ApiError } from "../utils/ApiError.js";
 import { ApiResponse } from "../utils/ApiResponse.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
-import { uploadOnCloudinary } from "../utils/cloudinary.js";
-
-// Helper function to extract public ID from Cloudinary URL
-const extractPublicId = (cloudinaryUrl) => {
-  const parts = cloudinaryUrl.split("/");
-  const fileNameWithExtension = parts[parts.length - 1];
-  const publicId = fileNameWithExtension.split(".")[0];
-  return publicId;
-};
+import {
+  uploadOnCloudinary,
+  deleteFromCloudinary,
+} from "../utils/cloudinary.js";
 
 const getAllVideos = asyncHandler(async (req, res) => {
   const {
@@ -98,6 +93,12 @@ const getAllVideos = asyncHandler(async (req, res) => {
 const publishAVideo = asyncHandler(async (req, res) => {
   // TODO: get video, upload to cloudinary, create video
 
+  // check if the user exists
+  const user = await User.findById(req.user._id);
+  if (!user) {
+    throw new ApiError(404, "User not found");
+  }
+
   // get title, description and localpath of the video and thumbnail
   const { title, description } = req.body;
   const videoFileLocalPath = req.files?.videoFile[0]?.path;
@@ -120,6 +121,14 @@ const publishAVideo = asyncHandler(async (req, res) => {
     duration: videoFile.duration,
     owner: req.user._id,
   });
+
+  // Update users total video count
+  user.totalVideos = (user.totalVideos || 0) + 1;
+  await user.save();
+
+  // deleting files from cloudinary
+  await deleteFromCloudinary(videoFile.public_id, "video");
+  await deleteFromCloudinary(thumbnail.public_id, "image");
 
   // return the response if everything went well
   return res
@@ -155,35 +164,55 @@ const getVideoById = asyncHandler(async (req, res) => {
 });
 
 const updateVideo = asyncHandler(async (req, res) => {
-  //TODO: update video details like title, description, thumbnail
-  // get the title description video by its id
   const { videoId } = req.params;
   const { title, description } = req.body;
 
-  // update fields
-  const updateFields = {};
-  if (title) updateFields.title = title;
-  if (description) updateFields.description = description;
-
-  // update thumbnail if new file is uploaded
-  if (req.files?.thumbnail?.[0]?.path) {
-    const thumbnail = await uploadOnCloudinary(req.files.thumbnail[0].path);
-    updateFields.thumbnail = thumbnail.url;
+  // Check if title and description are provided
+  if (!title || !description) {
+    throw new ApiError(
+      400,
+      "Title and description are required to update the video"
+    );
   }
 
-  // update the video
-  const video = await Video.findByIdAndUpdate(
-    videoId,
-    { $set: updateFields },
-    { new: true }
-  );
-
-  // check if video exists
+  // Find the video by ID
+  const video = await Video.findById(videoId);
   if (!video) {
     throw new ApiError(404, "Video not found");
   }
 
-  // return the response
+  // Check if the authenticated user is the owner of the video
+  if (!video.owner.equals(req.user._id)) {
+    throw new ApiError(403, "You are not authorized to update this video");
+  }
+
+  // Update the title and description
+  video.title = title;
+  video.description = description;
+
+  // Check if a new thumbnail is uploaded
+  // const thumbnailLocalPath = req.files?.thumbnail?.[0]?.path;
+
+  const thumbnailLocalPath = req.file?.path;
+  if (thumbnailLocalPath) {
+    // Upload the new thumbnail to Cloudinary
+    const thumbnail = await uploadOnCloudinary(thumbnailLocalPath);
+
+    if (!thumbnail.url) {
+      throw new ApiError(400, "Error while uploading thumbnail");
+    }
+
+    // Update the video with the new thumbnail URL
+    video.thumbnail = thumbnail.url;
+
+    // delete the updated thumbnail from cloudinary
+    await deleteFromCloudinary(thumbnail.public_id, "image");
+  }
+
+  // Save the updated video
+  await video.save();
+
+  // Return the response with the updated video
   return res
     .status(200)
     .json(new ApiResponse(200, video, "Video updated successfully"));
@@ -191,9 +220,9 @@ const updateVideo = asyncHandler(async (req, res) => {
 
 const deleteVideo = asyncHandler(async (req, res) => {
   //TODO: delete video
-
   // get the video ID
   const { videoId } = req.params;
+
   if (!isValidObjectId(videoId)) {
     throw new ApiError(400, "Invalid video ID");
   }
@@ -204,23 +233,22 @@ const deleteVideo = asyncHandler(async (req, res) => {
     throw new ApiError(404, "Video not found");
   }
 
-  // Extract the public ID from the video file URL
-  const videoFilePublicId = extractPublicId(video.videoFile);
-  // Delete the video from Cloudinary
-  if (videoFilePublicId) {
-    await cloudinary.uploader.destroy(videoFilePublicId, {
-      resource_type: "video",
-    });
+  // check if the authenticated user is the owner
+  if (!video.owner.equals(req.user._id)) {
+    throw new ApiError(403, "You are not authorized to delete this video");
   }
 
-  // if video ID found
-  //   const video = await Video.findByIdAndDelete(videoId);
-
-  //   if (!video) {
-  //     throw new ApiError(404, "Video not found");
-  //   }
+  // check if user exist
+  const user = await User.findById(req.user._id);
+  if (!user) {
+    throw new ApiError(404, "User not found");
+  }
 
   await Video.findByIdAndDelete(videoId);
+
+  // Decrease users total video count
+  user.totalVideos = (user.totalVideos || 1) - 1;
+  await user.save();
 
   // TODO: Optionally delete the video file from cloud storage
 
@@ -243,6 +271,14 @@ const togglePublishStatus = asyncHandler(async (req, res) => {
   // check again if video exists or not
   if (!video) {
     throw new ApiError(404, "Video not found");
+  }
+
+  // check if the authenticated user is the owner
+  if (!video.owner.equals(req.user._id)) {
+    throw new ApiError(
+      403,
+      "You are not authorized to change the status of this video"
+    );
   }
 
   // if video exists
